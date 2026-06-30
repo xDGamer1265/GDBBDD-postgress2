@@ -1,0 +1,202 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
+
+	log "github.com/DumbCaveSpider/GDAlternativeWeb/log"
+)
+
+type CheckRequest struct {
+	AccountId  string `json:"accountId"`
+	ArgonToken string `json:"argonToken"`
+}
+
+func (c *CheckRequest) UnmarshalJSON(data []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	get := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := raw[k]; ok && v != nil {
+				switch t := v.(type) {
+				case string:
+					return t
+				case float64:
+					return fmt.Sprintf("%.0f", t)
+				default:
+					return fmt.Sprintf("%v", t)
+				}
+			}
+		}
+		return ""
+	}
+	c.AccountId = get("accountId", "account_id")
+	c.ArgonToken = get("argonToken", "argon_token")
+	return nil
+}
+
+func init() {
+	http.HandleFunc("/check", checkHandler)
+}
+
+func checkHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		log.Debug("check: invalid method %s", r.Method)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Warn("check: read body error: %v", err)
+		http.Error(w, "Failed to read request", http.StatusBadRequest)
+		return
+	}
+	var req CheckRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		log.Warn("check: json unmarshal error: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.AccountId == "" || req.ArgonToken == "" {
+		log.Warn("check: missing accountId or argonToken")
+		http.Error(w, "Missing Account ID or Argon Token", http.StatusBadRequest)
+		return
+	}
+
+	maxDataSize := 33554432
+	if v := os.Getenv("MAX_DATA_SIZE_BYTES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			maxDataSize = parsed
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	db := DB
+	if db == nil {
+		log.Error("check: DB not initialized")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var storedToken sql.NullString
+	var isSubscriber bool
+	// Note: subscriber column usage
+	row := db.QueryRowContext(ctx, Q("SELECT argon_token, subscriber FROM accounts WHERE account_id = ?"), req.AccountId)
+	switch err := row.Scan(&storedToken, &isSubscriber); err {
+	case sql.ErrNoRows:
+		http.Error(w, "Account not found", http.StatusForbidden)
+		return
+	case nil:
+		if !storedToken.Valid || storedToken.String != req.ArgonToken {
+			http.Error(w, "Invalid Argon Token", http.StatusForbidden)
+			return
+		}
+	default:
+		log.Error("check: account lookup error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Adjust maxDataSize for subscribers
+	if isSubscriber {
+		// Default 512MB
+		maxDataSize = 536870912
+		// Override from env if present
+		if v := os.Getenv("SUBSCRIBER_MAX_DATA_SIZE_BYTES"); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+				maxDataSize = parsed
+			}
+		}
+	}
+
+	var saveData, levelData sql.NullString
+	var createdAt sql.NullTime
+	r2 := db.QueryRowContext(ctx, Q("SELECT save_data, level_data, created_at FROM saves WHERE account_id = ?"), req.AccountId)
+	if err := r2.Scan(&saveData, &levelData, &createdAt); err != nil {
+		if err == sql.ErrNoRows {
+			// not found (new account)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"saveData":            0,
+				"levelData":           0,
+				"totalSize":           0,
+				"lastSaved":           "",
+				"maxDataSize":         maxDataSize,
+				"freeSpacePercentage": 100.0,
+				"usedSpacePercentage": 0.0,
+				"subscriber":          isSubscriber,
+			})
+			return
+		}
+		log.Error("check: save lookup error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	saveLen := 0
+	levelLen := 0
+	if saveData.Valid {
+		saveLen = len(saveData.String)
+	}
+	if levelData.Valid {
+		levelLen = len(levelData.String)
+	}
+	lastSaved := ""
+	lastSavedRelative := ""
+	if createdAt.Valid {
+		lastSaved = createdAt.Time.Format(time.RFC3339)
+		days := int(time.Since(createdAt.Time).Hours() / 24)
+		switch days {
+		case 0:
+			lastSavedRelative = "today"
+		case 1:
+			lastSavedRelative = "1 day ago"
+		default:
+			lastSavedRelative = fmt.Sprintf("%d days ago", days)
+		}
+	}
+
+	totalSize := saveLen + levelLen
+	freeSpace := maxDataSize - totalSize
+	if freeSpace < 0 {
+		freeSpace = 0
+	}
+	freeSpacePercentage := float64(freeSpace) / float64(maxDataSize) * 100
+	usedSpacePercentage := float64(totalSize) / float64(maxDataSize) * 100
+
+	resp := struct {
+		SaveData            int     `json:"saveData"`
+		LevelData           int     `json:"levelData"`
+		TotalSize           int     `json:"totalSize"`
+		LastSaved           string  `json:"lastSaved"`
+		LastSavedRelative   string  `json:"lastSavedRelative"`
+		FreeSpacePercentage float64 `json:"freeSpacePercentage"`
+		UsedSpacePercentage float64 `json:"usedSpacePercentage"`
+		MaxDataSize         int     `json:"maxDataSize"`
+		Subscriber          bool    `json:"subscriber"`
+	}{
+		SaveData:            saveLen,
+		LevelData:           levelLen,
+		TotalSize:           totalSize,
+		LastSaved:           lastSaved,
+		LastSavedRelative:   lastSavedRelative,
+		FreeSpacePercentage: freeSpacePercentage,
+		UsedSpacePercentage: usedSpacePercentage,
+		MaxDataSize:         maxDataSize,
+		Subscriber:          isSubscriber,
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}

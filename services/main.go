@@ -252,19 +252,58 @@ func ensureSavesMigration() error {
 		return fmt.Errorf("DB not initialized")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	createStmt := `CREATE TABLE IF NOT EXISTS saves (
 		id BIGSERIAL PRIMARY KEY,
 		account_id VARCHAR(255) NOT NULL,
 		save_data BYTEA NOT NULL,
-		level_data BYTEA NOT NULL DEFAULT '',
+		level_data BYTEA NOT NULL DEFAULT '\x'::bytea,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		CONSTRAINT unique_account UNIQUE (account_id)
 	);`
 
 	if _, err := DB.ExecContext(ctx, createStmt); err != nil {
+		return err
+	}
+
+	if err := ensureByteaColumn(ctx, "save_data"); err != nil {
+		return err
+	}
+	if err := ensureByteaColumn(ctx, "level_data"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureByteaColumn(ctx context.Context, column string) error {
+	var dataType string
+	query := `SELECT data_type
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'saves'
+		  AND column_name = $1`
+	if err := DB.QueryRowContext(ctx, query, column).Scan(&dataType); err != nil {
+		return err
+	}
+	if dataType == "bytea" {
+		return nil
+	}
+
+	dropDefault := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s DROP DEFAULT", column)
+	if _, err := DB.ExecContext(ctx, dropDefault); err != nil {
+		return err
+	}
+
+	alter := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s TYPE BYTEA USING convert_to(%s::text, 'UTF8')", column, column)
+	if _, err := DB.ExecContext(ctx, alter); err != nil {
+		return err
+	}
+
+	setDefault := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s SET DEFAULT '\\x'::bytea", column)
+	if _, err := DB.ExecContext(ctx, setDefault); err != nil {
 		return err
 	}
 	return nil

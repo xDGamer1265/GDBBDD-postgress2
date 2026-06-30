@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -95,10 +94,10 @@ func loadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var saveData sql.NullString
+	var saveData []byte
 	r2 := db.QueryRowContext(ctx, Q("SELECT save_data FROM saves WHERE account_id = ?"), req.AccountId)
 	if err := r2.Scan(&saveData); err != nil {
-		if err == sql.ErrNoRows {
+		if err.Error() == "sql: no rows in result set" {
 			// no save found
 			http.Error(w, "Save data not found", http.StatusNotFound)
 			return
@@ -108,12 +107,12 @@ func loadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !saveData.Valid {
+	if len(saveData) == 0 {
 		http.Error(w, "Save data invalid", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(saveData.String))
+	_, _ = w.Write(saveData)
 }

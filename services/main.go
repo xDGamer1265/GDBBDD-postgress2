@@ -258,8 +258,8 @@ func ensureSavesMigration() error {
 	createStmt := `CREATE TABLE IF NOT EXISTS saves (
 		id BIGSERIAL PRIMARY KEY,
 		account_id VARCHAR(255) NOT NULL,
-		save_data TEXT NOT NULL,
-		level_data TEXT NOT NULL DEFAULT '',
+		save_data BYTEA NOT NULL,
+		level_data BYTEA NOT NULL DEFAULT '',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		CONSTRAINT unique_account UNIQUE (account_id)
 	);`

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -120,7 +119,7 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var saveData, levelData sql.NullString
+	var saveData, levelData []byte
 	var createdAt sql.NullTime
 	r2 := db.QueryRowContext(ctx, Q("SELECT save_data, level_data, created_at FROM saves WHERE account_id = ?"), req.AccountId)
 	if err := r2.Scan(&saveData, &levelData, &createdAt); err != nil {
@@ -144,14 +143,8 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	saveLen := 0
-	levelLen := 0
-	if saveData.Valid {
-		saveLen = len(saveData.String)
-	}
-	if levelData.Valid {
-		levelLen = len(levelData.String)
-	}
+	saveLen := len(saveData)
+	levelLen := len(levelData)
 	lastSaved := ""
 	lastSavedRelative := ""
 	if createdAt.Valid {

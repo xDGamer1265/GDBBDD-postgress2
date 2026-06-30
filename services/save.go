@@ -121,8 +121,8 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	createStmt := `CREATE TABLE IF NOT EXISTS saves (
 		id BIGSERIAL PRIMARY KEY,
 		account_id VARCHAR(255) NOT NULL,
-		save_data TEXT NOT NULL,
-		level_data TEXT NOT NULL,
+		save_data BYTEA NOT NULL,
+		level_data BYTEA NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		CONSTRAINT unique_account UNIQUE (account_id)
 	);`
@@ -192,7 +192,7 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	// Ensure row exists with empty data if not present
 	//INSERT IGNORE so it does nothing if the row already exists.
 	// This splits the operation: first ensure row, then update columns separately.
-	ensureStmt := Q("INSERT INTO saves (account_id, save_data, level_data) VALUES (?, '', '') ON CONFLICT (account_id) DO NOTHING")
+	ensureStmt := Q("INSERT INTO saves (account_id, save_data, level_data) VALUES (?, '\\x', '\\x') ON CONFLICT (account_id) DO NOTHING")
 	if _, err := execWithRetries(ctx, db, ensureStmt, req.AccountId); err != nil {
 		log.Error("save: ensure row error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -241,7 +241,7 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		updateSave := Q("UPDATE saves SET save_data = ?, created_at = CURRENT_TIMESTAMP WHERE account_id = ?")
-		if _, err := execWithRetries(ctx, db, updateSave, req.SaveData, req.AccountId); err != nil {
+		if _, err := execWithRetries(ctx, db, updateSave, []byte(req.SaveData), req.AccountId); err != nil {
 			log.Error("save: update save_data error: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -257,10 +257,10 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Debug("save: updating level_data (size=%d)", len(req.LevelData))
 		updateLevel := Q("UPDATE saves SET level_data = ?, created_at = CURRENT_TIMESTAMP WHERE account_id = ?")
-		if _, err := execWithRetries(ctx, db, updateLevel, req.LevelData, req.AccountId); err != nil {
+		if _, err := execWithRetries(ctx, db, updateLevel, []byte(req.LevelData), req.AccountId); err != nil {
 			log.Error("save: update level_data error: %v", err)
 			if strings.Contains(err.Error(), "connection reset by peer") {
-				log.Warn("save: 'connection reset by peer' often indicates that the MySQL server's 'max_allowed_packet' is smaller than the data being sent (%d bytes). Please check your MySQL server configuration (my.cnf/my.ini) and ensure 'max_allowed_packet' is large enough.", len(req.LevelData))
+				log.Warn("save: 'connection reset by peer' often indicates a network or server issue while sending %d bytes.", len(req.LevelData))
 			}
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return

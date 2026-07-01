@@ -17,6 +17,16 @@ CREATE TABLE IF NOT EXISTS saves (
     CONSTRAINT unique_account UNIQUE (account_id)
 );
 
+-- Chunked save payloads for large Geometry Dash data
+CREATE TABLE IF NOT EXISTS save_chunks (
+    account_id VARCHAR(255) NOT NULL,
+    data_kind VARCHAR(16) NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    chunk_data BYTEA NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (account_id, data_kind, chunk_index)
+);
+
 -- Memberships table
 CREATE TABLE IF NOT EXISTS memberships (
     id SERIAL PRIMARY KEY,

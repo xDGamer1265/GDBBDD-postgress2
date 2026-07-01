@@ -62,6 +62,15 @@ func loadLevelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if written, err := writeChunkedData(ctx, w, db, req.AccountId, "level"); err != nil {
+		log.Error("loadlevel: chunk lookup error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	} else if written > 0 {
+		return
+	}
+
 	var levelData []byte
 	r2 := db.QueryRowContext(ctx, Q("SELECT level_data FROM saves WHERE account_id = ?"), req.AccountId)
 	if err := r2.Scan(&levelData); err != nil {
@@ -79,7 +88,6 @@ func loadLevelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(levelData)
 }

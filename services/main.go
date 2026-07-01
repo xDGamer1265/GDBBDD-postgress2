@@ -37,6 +37,16 @@ func main() {
 	if err := ensureSavesMigration(); err != nil {
 		log.Warn("DB migration warning (saves): %v", err)
 	}
+	if err := ensureSaveChunksMigration(); err != nil {
+		log.Warn("DB migration warning (save chunks): %v", err)
+	}
+	if DB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := ensureMembershipsTable(ctx, DB); err != nil {
+			log.Warn("DB migration warning (memberships): %v", err)
+		}
+		cancel()
+	}
 
 	http.HandleFunc("/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		//log.Debug("pong: %s", r.RemoteAddr)
@@ -176,6 +186,12 @@ func runCleanup() {
 		// Using bulk deletes reduces index tree lock congestion,
 		// but chunking limits the table-lock impact duration
 		deleteSaves := fmt.Sprintf("DELETE FROM saves WHERE account_id IN (%s)", inClause)
+		deleteChunks := fmt.Sprintf("DELETE FROM save_chunks WHERE account_id IN (%s)", inClause)
+		_, errChunks := DB.ExecContext(ctx, Q(deleteChunks), args...)
+		if errChunks != nil {
+			log.Warn("cleanup: chunk save_chunks delete error: %v", errChunks)
+		}
+
 		_, errSaves := DB.ExecContext(ctx, Q(deleteSaves), args...)
 		if errSaves != nil {
 			log.Warn("cleanup: chunk saves delete error: %v", errSaves)

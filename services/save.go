@@ -131,6 +131,11 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	if err := ensureSaveChunksMigration(); err != nil {
+		log.Error("save: create chunks table error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
 	acctCreate := `CREATE TABLE IF NOT EXISTS accounts (
 		account_id VARCHAR(255) PRIMARY KEY,
@@ -201,8 +206,15 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check total storage limit (Combines new data with existing data)
 	var curSaveBytes, curLevelBytes int64
-	if err := db.QueryRowContext(ctx, Q("SELECT LENGTH(save_data), LENGTH(level_data) FROM saves WHERE account_id = ?"), req.AccountId).Scan(&curSaveBytes, &curLevelBytes); err != nil {
+	curSaveBytes, err := chunkedDataLen(ctx, db, req.AccountId, "save", "save_data")
+	if err != nil {
 		log.Error("save: size lookup error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	curLevelBytes, err = chunkedDataLen(ctx, db, req.AccountId, "level", "level_data")
+	if err != nil {
+		log.Error("save: level size lookup error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -240,8 +252,7 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Save data size exceeded max allowed packet", http.StatusRequestEntityTooLarge)
 			return
 		}
-		updateSave := Q("UPDATE saves SET save_data = ?, created_at = CURRENT_TIMESTAMP WHERE account_id = ?")
-		if _, err := execWithRetries(ctx, db, updateSave, []byte(req.SaveData), req.AccountId); err != nil {
+		if err := replaceChunkedData(ctx, db, req.AccountId, "save", "save_data", []byte(req.SaveData)); err != nil {
 			log.Error("save: update save_data error: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -256,8 +267,7 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Debug("save: updating level_data (size=%d)", len(req.LevelData))
-		updateLevel := Q("UPDATE saves SET level_data = ?, created_at = CURRENT_TIMESTAMP WHERE account_id = ?")
-		if _, err := execWithRetries(ctx, db, updateLevel, []byte(req.LevelData), req.AccountId); err != nil {
+		if err := replaceChunkedData(ctx, db, req.AccountId, "level", "level_data", []byte(req.LevelData)); err != nil {
 			log.Error("save: update level_data error: %v", err)
 			if strings.Contains(err.Error(), "connection reset by peer") {
 				log.Warn("save: 'connection reset by peer' often indicates a network or server issue while sending %d bytes.", len(req.LevelData))

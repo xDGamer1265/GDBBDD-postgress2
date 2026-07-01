@@ -120,10 +120,10 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var saveData, levelData []byte
+	var saveLen, levelLen int64
 	var createdAt sql.NullTime
-	r2 := db.QueryRowContext(ctx, Q("SELECT save_data, level_data, created_at FROM saves WHERE account_id = ?"), req.AccountId)
-	if err := r2.Scan(&saveData, &levelData, &createdAt); err != nil {
+	r2 := db.QueryRowContext(ctx, Q("SELECT created_at FROM saves WHERE account_id = ?"), req.AccountId)
+	if err := r2.Scan(&createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			// not found (new account)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -144,8 +144,18 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	saveLen := len(saveData)
-	levelLen := len(levelData)
+	saveLen, err = chunkedDataLen(ctx, db, req.AccountId, "save", "save_data")
+	if err != nil {
+		log.Error("check: save size lookup error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	levelLen, err = chunkedDataLen(ctx, db, req.AccountId, "level", "level_data")
+	if err != nil {
+		log.Error("check: level size lookup error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	lastSaved := ""
 	lastSavedRelative := ""
 	if createdAt.Valid {
@@ -161,7 +171,7 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	totalSize := saveLen + levelLen
+	totalSize := int(saveLen + levelLen)
 	freeSpace := maxDataSize - totalSize
 	if freeSpace < 0 {
 		freeSpace = 0
@@ -180,8 +190,8 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		MaxDataSize         int     `json:"maxDataSize"`
 		Subscriber          bool    `json:"subscriber"`
 	}{
-		SaveData:            saveLen,
-		LevelData:           levelLen,
+		SaveData:            int(saveLen),
+		LevelData:           int(levelLen),
 		TotalSize:           totalSize,
 		LastSaved:           lastSaved,
 		LastSavedRelative:   lastSavedRelative,

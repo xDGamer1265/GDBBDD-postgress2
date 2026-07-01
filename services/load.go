@@ -94,7 +94,7 @@ func loadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var saveData string
+	var saveData []byte
 	r2 := db.QueryRowContext(ctx, Q("SELECT save_data FROM saves WHERE account_id = ?"), req.AccountId)
 	if err := r2.Scan(&saveData); err != nil {
 		if err.Error() == "sql: no rows in result set" {
@@ -114,5 +114,5 @@ func loadHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(saveData))
+	_, _ = w.Write(saveData)
 }

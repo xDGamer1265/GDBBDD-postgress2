@@ -258,8 +258,8 @@ func ensureSavesMigration() error {
 	createStmt := `CREATE TABLE IF NOT EXISTS saves (
 		id BIGSERIAL PRIMARY KEY,
 		account_id VARCHAR(255) NOT NULL,
-		save_data TEXT NOT NULL,
-		level_data TEXT NOT NULL DEFAULT '',
+		save_data BYTEA NOT NULL,
+		level_data BYTEA NOT NULL DEFAULT '\x'::bytea,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		CONSTRAINT unique_account UNIQUE (account_id)
 	);`
@@ -268,17 +268,17 @@ func ensureSavesMigration() error {
 		return err
 	}
 
-	if err := ensureTextColumn(ctx, "save_data"); err != nil {
+	if err := ensureByteaColumn(ctx, "save_data"); err != nil {
 		return err
 	}
-	if err := ensureTextColumn(ctx, "level_data"); err != nil {
+	if err := ensureByteaColumn(ctx, "level_data"); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func ensureTextColumn(ctx context.Context, column string) error {
+func ensureByteaColumn(ctx context.Context, column string) error {
 	var dataType string
 	query := `SELECT data_type
 		FROM information_schema.columns
@@ -288,7 +288,7 @@ func ensureTextColumn(ctx context.Context, column string) error {
 	if err := DB.QueryRowContext(ctx, query, column).Scan(&dataType); err != nil {
 		return err
 	}
-	if dataType == "text" {
+	if dataType == "bytea" {
 		return nil
 	}
 
@@ -297,16 +297,12 @@ func ensureTextColumn(ctx context.Context, column string) error {
 		return err
 	}
 
-	conversion := fmt.Sprintf("%s::text", column)
-	if dataType == "bytea" {
-		conversion = fmt.Sprintf("convert_from(%s, 'UTF8')", column)
-	}
-	alter := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s TYPE TEXT USING %s", column, conversion)
+	alter := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s TYPE BYTEA USING convert_to(%s::text, 'UTF8')", column, column)
 	if _, err := DB.ExecContext(ctx, alter); err != nil {
 		return err
 	}
 
-	setDefault := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s SET DEFAULT ''", column)
+	setDefault := fmt.Sprintf("ALTER TABLE saves ALTER COLUMN %s SET DEFAULT '\\x'::bytea", column)
 	if _, err := DB.ExecContext(ctx, setDefault); err != nil {
 		return err
 	}

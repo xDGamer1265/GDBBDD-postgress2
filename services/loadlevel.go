@@ -62,7 +62,7 @@ func loadLevelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var levelData string
+	var levelData []byte
 	r2 := db.QueryRowContext(ctx, Q("SELECT level_data FROM saves WHERE account_id = ?"), req.AccountId)
 	if err := r2.Scan(&levelData); err != nil {
 		if err.Error() == "sql: no rows in result set" {
@@ -81,5 +81,5 @@ func loadLevelHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(levelData))
+	_, _ = w.Write(levelData)
 }

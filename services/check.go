@@ -120,7 +120,7 @@ func checkHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var saveData, levelData string
+	var saveData, levelData []byte
 	var createdAt sql.NullTime
 	r2 := db.QueryRowContext(ctx, Q("SELECT save_data, level_data, created_at FROM saves WHERE account_id = ?"), req.AccountId)
 	if err := r2.Scan(&saveData, &levelData, &createdAt); err != nil {
